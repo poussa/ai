@@ -3,3 +3,4 @@
 __pycache__/
 *.pyc
 Claude outputs/
+agent_history.json

@@ -42,9 +42,14 @@ def build_backend():
 
 def main():
     backend_kind = os.environ.get("AGENT_BACKEND", "claude")
-    agent = Agent(build_backend())
+    # Set AGENT_HISTORY_FILE="" to disable persistence and start fresh every run.
+    history_file = os.environ.get("AGENT_HISTORY_FILE", "agent_history.json") or None
+    agent = Agent(build_backend(), history_file=history_file)
 
-    print(f"Bare-bones agent ready (backend={backend_kind}). Ctrl-D to quit.\n")
+    print(f"Bare-bones agent ready (backend={backend_kind}). Ctrl-D to quit.")
+    if agent.history:
+        print(f"Resumed {len(agent.history)} prior message(s) from {history_file}.")
+    print()
     while True:
         try:
             user_input = input("you> ").strip()

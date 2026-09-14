@@ -27,7 +27,8 @@ loop itself is about 30 lines — see `agent/core.py`.
 
 ```
 agent/
-  tools.py             the toolbox: calculator, get_current_time, read_file
+  tools.py             the toolbox: calculator, get_current_time, read_file,
+                        web_search
   llm_anthropic.py      backend adapter for the Claude API (frontier, hosted)
   llm_openai_compat.py  backend adapter for any OpenAI-compatible server
                          (Ollama, llama.cpp, LM Studio, vLLM, or a hosted
@@ -59,6 +60,33 @@ python main.py
 Try asking it something that needs a tool, e.g. `what's 37 * 84?` or
 `what time is it?`, and watch the `-> tool call` / `<- tool result` lines
 that `core.py` prints — that's the loop happening in real time.
+
+Conversation history is written to `agent_history.json` after every turn, so
+quitting (Ctrl-D) and running `python main.py` again resumes where you left
+off. Set `AGENT_HISTORY_FILE=""` to disable this and always start fresh, or
+just delete the file to reset.
+
+### Tools
+
+| Tool | What it does |
+| --- | --- |
+| `calculator` | Evaluates arithmetic without an unsafe `eval()` — see the restricted AST walker in `tools.py`. |
+| `get_current_time` | Returns the current UTC time. |
+| `read_file` | Reads a small local text file. |
+| `web_search` | Searches for real-time information (news, prices, anything past the model's training cutoff). Works out of the box via [DuckDuckGo's keyless Instant Answer API](https://duckduckgo.com/api) — no signup, but limited to infobox-style results (definitions, summaries), not general web search. Set `BRAVE_SEARCH_API_KEY` in `.env` (free tier: 2,000 queries/month at [Brave Search API](https://api.search.brave.com/app/keys)) for real web results instead. |
+
+Ask something like `who won the last F1 race?` or `what's the current price
+of bitcoin?` to see `web_search` get picked over the model's own (stale)
+knowledge. Try it both with and without `BRAVE_SEARCH_API_KEY` set to see
+the difference between the two search backends.
+
+Why not just use Google? Its Custom Search API still needs an API key (and
+a Search Engine ID) with a 100-query/day free tier — no simpler than Brave
+— and scraping Google's results page directly violates its Terms of
+Service and breaks whenever they change their markup. General web search
+requires someone to have already crawled and indexed the web, so a key of
+some kind is unavoidable if you want more than DuckDuckGo's instant
+answers.
 
 ## Three ways to run it
 
@@ -161,7 +189,6 @@ exact step.
 Once this loop feels obvious, natural extensions to try (each is a small,
 self-contained upgrade to this same codebase):
 
-- Persist `agent.history` to disk so conversations survive a restart.
 - Add a tool that calls a real API (weather, search) to see how the model
   handles a tool that can fail or time out.
 - Cap tool output size / add a tool allow-list to think about what a

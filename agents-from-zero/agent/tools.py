@@ -12,6 +12,9 @@ import ast
 import datetime
 import operator
 import os
+import re
+
+import requests
 
 # --- tool implementations ---------------------------------------------------
 
@@ -62,6 +65,84 @@ def get_current_time() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def web_search(query: str, num_results: int = 5) -> str:
+    """Search the web for current/real-time information.
+
+    Uses the Brave Search API (real web results) if BRAVE_SEARCH_API_KEY is
+    set, since general web search needs someone to have already crawled and
+    indexed the web -- that's the infrastructure an API key is paying for.
+    Falls back to DuckDuckGo's keyless Instant Answer API otherwise, so the
+    tool works with zero setup, at the cost of only covering infobox-style
+    answers (definitions, summaries) rather than full web results.
+    """
+    if os.environ.get("BRAVE_SEARCH_API_KEY"):
+        return _brave_search(query, num_results)
+    return _duckduckgo_search(query, num_results)
+
+
+def _brave_search(query: str, num_results: int) -> str:
+    api_key = os.environ["BRAVE_SEARCH_API_KEY"]
+    try:
+        resp = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+            params={"q": query, "count": num_results},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return f"error: search request failed: {e}"
+
+    results = resp.json().get("web", {}).get("results", [])[:num_results]
+    if not results:
+        return f"No results found for '{query}'."
+
+    lines = []
+    for r in results:
+        title = r.get("title", "")
+        url = r.get("url", "")
+        # Brave puts <strong> highlight tags around matched terms in the snippet.
+        snippet = re.sub(r"<[^>]+>", "", r.get("description", ""))
+        lines.append(f"- {title} ({url}): {snippet}")
+    return "\n".join(lines)
+
+
+def _duckduckgo_search(query: str, num_results: int) -> str:
+    try:
+        resp = requests.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return f"error: search request failed: {e}"
+
+    data = resp.json()
+    lines = []
+
+    if data.get("AbstractText"):
+        lines.append(f"- {data.get('Heading') or query} ({data.get('AbstractURL', '')}): {data['AbstractText']}")
+    if data.get("Answer"):
+        lines.append(f"- Answer: {data['Answer']}")
+    if data.get("Definition"):
+        lines.append(f"- Definition ({data.get('DefinitionURL', '')}): {data['Definition']}")
+
+    for topic in data.get("RelatedTopics", []):
+        if len(lines) >= num_results:
+            break
+        if topic.get("Text") and topic.get("FirstURL"):
+            lines.append(f"- {topic['Text']} ({topic['FirstURL']})")
+
+    if not lines:
+        return (
+            f"No instant-answer results for '{query}' from DuckDuckGo's keyless "
+            "API (it only covers infoboxes/definitions, not general web search "
+            "-- set BRAVE_SEARCH_API_KEY in .env for real web search results)."
+        )
+    return "\n".join(lines[:num_results])
+
+
 def read_file(path: str) -> str:
     try:
         full_path = os.path.abspath(os.path.expanduser(path))
@@ -106,6 +187,26 @@ TOOLS = {
             "parameters": {"type": "object", "properties": {}},
         },
         "function": get_current_time,
+    },
+    "web_search": {
+        "schema": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current or real-time information -- news, "
+                "prices, scores, recent events, or anything else the model "
+                "can't already know. Returns a short list of titles, URLs, "
+                "and snippets (or definitions/summaries only, if no search "
+                "API key is configured)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query."}
+                },
+                "required": ["query"],
+            },
+        },
+        "function": web_search,
     },
     "read_file": {
         "schema": {

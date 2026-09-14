@@ -11,49 +11,77 @@ hides behind an `.invoke()`. Stripped to its essence, an agent is:
 That's the whole idea. Everything else (memory, planning, multi-agent,
 retries, guardrails) is refinement on top of this loop.
 """
+import json
+import os
+
 from . import tools as tool_registry
 
 SYSTEM_PROMPT = """You are a helpful assistant with access to tools.
 Use a tool when it gives you information you don't already have or can't
-compute reliably yourself (arithmetic, the current time, file contents).
-Once you have enough information, answer the user directly in plain text
-without calling a tool."""
+compute reliably yourself (arithmetic, the current time, file contents,
+or anything current/real-time that a web search would answer). Once you
+have enough information, answer the user directly in plain text without
+calling a tool."""
 
 
 class Agent:
-    def __init__(self, backend, system_prompt: str = SYSTEM_PROMPT, max_steps: int = 6, verbose: bool = True):
+    def __init__(
+        self,
+        backend,
+        system_prompt: str = SYSTEM_PROMPT,
+        max_steps: int = 6,
+        verbose: bool = True,
+        history_file: str = None,
+    ):
         self.backend = backend
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         self.verbose = verbose
-        self.history = []  # canonical message list; persists across .run() calls
+        self.history_file = history_file
+        # canonical message list; persists across .run() calls in memory, and
+        # across process restarts too if history_file is set.
+        self.history = self._load_history()
 
     def _log(self, *parts):
         if self.verbose:
             print(*parts)
 
+    def _load_history(self) -> list:
+        if not self.history_file or not os.path.exists(self.history_file):
+            return []
+        with open(self.history_file, "r") as f:
+            return json.load(f)
+
+    def _append(self, entry: dict):
+        self.history.append(entry)
+        if self.history_file:
+            # Written after every turn (not just at exit) so a crash mid-loop
+            # still leaves the file consistent with what the model actually saw.
+            with open(self.history_file, "w") as f:
+                json.dump(self.history, f, indent=2)
+
     def run(self, user_input: str) -> str:
-        self.history.append({"role": "user", "content": user_input})
+        self._append({"role": "user", "content": user_input})
         tool_schemas = tool_registry.get_tool_schemas()
 
         for _ in range(self.max_steps):
             reply = self.backend.chat(self.system_prompt, self.history, tool_schemas)
 
             if reply["tool_calls"]:
-                self.history.append(
+                self._append(
                     {"role": "assistant", "content": reply["content"], "tool_calls": reply["tool_calls"]}
                 )
                 for call in reply["tool_calls"]:
                     self._log(f"  -> {call['name']}({call['arguments']})")
                     result = tool_registry.call_tool(call["name"], call["arguments"])
                     self._log(f"  <- {result}")
-                    self.history.append(
+                    self._append(
                         {"role": "tool", "tool_call_id": call["id"], "name": call["name"], "content": result}
                     )
                 continue  # feed the tool result back and let the model decide what's next
 
             # No tool call: the model is done, and this is its final answer.
-            self.history.append({"role": "assistant", "content": reply["content"]})
+            self._append({"role": "assistant", "content": reply["content"]})
             return reply["content"]
 
         return "(gave up: hit max_steps without reaching a final answer)"
